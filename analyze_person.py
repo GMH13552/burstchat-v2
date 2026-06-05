@@ -95,6 +95,21 @@ def find_api_key() -> str:
 
 # ── Step 1: 从微信提取聊天记录 ──────────────────────────────────────
 
+def _find_wechatmsg_export(target: str) -> Path | None:
+    """搜索 WeChatMsg 的导出文件"""
+    candidates = [
+        Path.home() / "Desktop" / f"{target}.txt",
+        Path.home() / "Desktop" / f"{target}_chat.txt",
+        Path.home() / "Downloads" / f"{target}.txt",
+        Path.home() / "Downloads" / f"{target}_chat.txt",
+        Path.home() / ".openclaw" / "workspace" / f"{target}_chat.txt",
+    ]
+    for p in candidates:
+        if p.exists() and p.stat().st_size > 500:
+            return p
+    return None
+
+
 def extract_chat(cfg: dict, target: str, output_path: Path) -> bool:
     """尝试从微信数据库提取聊天记录"""
     db_dir = cfg["WECHAT_DB_DIR"]
@@ -103,10 +118,21 @@ def extract_chat(cfg: dict, target: str, output_path: Path) -> bool:
 
     db_path = Path(db_dir)
     if not db_path.exists():
-        print(f"  ⚠️ 微信数据库路径不存在: {db_dir}")
         return False
 
-    # 尝试用 wechat_parser 提取
+    # 检查数据库是否已解密
+    test_db = db_path / "MSG0.db" if db_path.is_dir() else db_path
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{test_db}?mode=ro", uri=True)
+        conn.execute("SELECT name FROM sqlite_master LIMIT 1")
+        conn.close()
+    except sqlite3.DatabaseError:
+        print(f"  ⚠️ 微信数据库加密中，无法直接读取")
+        print(f"  请用 WeChatMsg 导出后使用 --file 参数：")
+        print(f"    python analyze_person.py {target} --file 导出文件.txt")
+        return False
+
     parser = EXSKILL_DIR / "tools" / "wechat_parser.py"
     if not parser.exists():
         print("  ⚠️ 未找到 wechat_parser.py")
@@ -195,11 +221,18 @@ async def main():
     elif chat_file.exists():
         print(f"  📋 使用已有文件: {chat_file.name} ({chat_file.stat().st_size/1024:.0f}KB)")
     else:
-        ok = extract_chat(cfg, target, chat_file)
-        if not ok:
-            print(f"\n  ❌ 无法提取聊天记录。")
-            print(f"  请手动导出后使用: python analyze_person.py {target} --file 导出文件.txt")
-            sys.exit(1)
+        # 搜索 WeChatMsg 导出
+        wm_found = _find_wechatmsg_export(target)
+        if wm_found:
+            import shutil
+            shutil.copy(wm_found, chat_file)
+            print(f"  📋 从 WeChatMsg 导出复制: {chat_file.name}")
+        else:
+            ok = extract_chat(cfg, target, chat_file)
+            if not ok:
+                print(f"\n  💡 提示：打开 WeChatMsg → 选「{target}」→ 导出文本 → 放到 workspace")
+                print(f"  然后运行: python analyze_person.py {target} --file workspace/导出文件.txt")
+                sys.exit(1)
 
     # Step 2: 时间分析
     timing_out = workspace / f"{target}_timing.md"

@@ -82,6 +82,8 @@ def find_api_key() -> str:
     # 兼容旧位置
     for loc in [
         Path.home() / ".openclaw" / "workspace" / "companion" / ".env",
+        Path.home() / ".openclaw" / "workspace" / ".env",
+        HERE / ".env",
     ]:
         if loc.exists():
             with open(loc) as f:
@@ -133,11 +135,14 @@ def extract_chat(cfg: dict, target: str, output_path: Path) -> bool:
 
 # ── Step 2 & 3: 分析 ────────────────────────────────────────────────
 
-def run_cmd(cmd: list[str], desc: str, timeout: int = 120) -> bool:
+def run_cmd(cmd: list[str], desc: str, timeout: int = 120, extra_env: dict = None) -> bool:
     print(f"\n  {'─'*50}")
     print(f"  {desc}")
     print(f"  {'─'*50}")
-    result = subprocess.run(cmd, timeout=timeout)
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    result = subprocess.run(cmd, timeout=timeout, env=env)
     return result.returncode == 0
 
 
@@ -216,19 +221,12 @@ async def main():
     # Step 3: LLM 深度分析
     persona_out = workspace / f"{target}_persona.md"
     api_key = args.api_key or find_api_key()
-    if not api_key:
-        print("\n  ⚠️ 未找到 DEEPSEEK_API_KEY，跳过 LLM 分析")
-        print(f"  在 .env 中设置: DEEPSEEK_API_KEY=sk-xxx")
-        print(f"\n  ✅ 完成（仅时间分析）")
-        return
-
-    env = os.environ.copy()
-    env["DEEPSEEK_API_KEY"] = api_key
 
     ok = run_cmd(
         [sys.executable, str(TOOLS_DIR / "persona_extractor.py"),
          "-i", str(chat_file), "-t", target, "-o", str(persona_out)],
-        f"🧠 Step 3: LLM 深度画像 → {persona_out.name}"
+        f"🧠 Step 3: LLM 深度画像 → {persona_out.name}",
+        extra_env={"DEEPSEEK_API_KEY": api_key}
     )
     if not ok:
         sys.exit(1)

@@ -224,14 +224,24 @@ async def main():
         # 搜索 WeChatMsg 导出
         wm_found = _find_wechatmsg_export(target)
         if wm_found:
-            import shutil
             shutil.copy(wm_found, chat_file)
             print(f"  📋 从 WeChatMsg 导出复制: {chat_file.name}")
         else:
-            ok = extract_chat(cfg, target, chat_file)
-            if not ok:
-                print(f"\n  💡 提示：打开 WeChatMsg → 选「{target}」→ 导出文本 → 放到 workspace")
-                print(f"  然后运行: python analyze_person.py {target} --file workspace/导出文件.txt")
+            # 尝试自动从微信导出
+            print(f"  📱 尝试自动从微信导出...")
+            auto_export = HERE / "auto_export.py"
+            if auto_export.exists():
+                result = subprocess.run(
+                    [sys.executable, str(auto_export), target, "--export-only"],
+                    timeout=120,
+                )
+                if result.returncode != 0 or not chat_file.exists():
+                    print(f"\n  💡 自动导出失败。请打开 WeChatMsg → 选「{target}」→ 导出文本")
+                    print(f"  然后运行: python analyze_person.py {target} --file 导出文件.txt")
+                    sys.exit(1)
+            else:
+                print(f"\n  💡 提示：打开 WeChatMsg → 选「{target}」→ 导出文本")
+                print(f"  然后运行: python analyze_person.py {target} --file 导出文件.txt")
                 sys.exit(1)
 
     # Step 2: 时间分析

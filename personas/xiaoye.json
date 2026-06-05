@@ -62,13 +62,18 @@
   "timing": {
     "_comment": "时间维度由调度器管理，不写进LLM prompt",
 
-    "active_interval": {
-      "description": "对方不主动时，小野隔多久自己发消息",
-      "normal": 300,
-      "min": 120,
-      "max": 600,
-      "unit": "seconds"
+    "attention_delay": {
+      "_comment": "收到消息后到注意到消息的延迟。profile 代表看手机习惯",
+      "profile": "moderate",
+      "profiles": {
+        "instant":  {"min": 2,   "max": 8,   "desc": "秒看手机"},
+        "fast":     {"min": 5,   "max": 30,  "desc": "经常看手机"},
+        "moderate": {"min": 15,  "max": 120, "desc": "正常频率"},
+        "slow":     {"min": 60,  "max": 600, "desc": "很少看手机"},
+        "twilight": {"min": 300, "max": 3600,"desc": "轮回型"}
+      }
     },
+    "conversation_timeout": 600,
     "first_reply_gap": {
       "description": "用户进入聊天但还没进入对话状态时，小野第一次回复的延迟",
       "normal": 3,

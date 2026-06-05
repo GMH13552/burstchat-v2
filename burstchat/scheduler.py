@@ -1,9 +1,17 @@
 """
-核心调度器 v2：状态机 + 行为控制器 + burst 检测 + 插话重规划
+核心调度器 v2：对话状态机 + 行为控制器 + burst 检测 + 插话重规划
+
+对话状态模型（独立于 burst 检测）：
+  OUTSIDE → ATTENTION_DELAY → IN_CONVERSATION → OUTSIDE
+
+  OUTSIDE:          对方没在看聊天（忙自己的事）
+  ATTENTION_DELAY:  消息到了但还没注意到（等待 attention_delay 结束）
+  IN_CONVERSATION:  已进入对话，正常 persona 节奏
 """
 
 import asyncio
 import json
+import random
 import time
 from typing import Optional
 
@@ -12,6 +20,17 @@ from .llm import LLMClient
 from .behavior import BehaviorController
 from .search import search_sogou
 from .prompt import SEARCH_RESULT_HINT
+
+
+class ConvState:
+    """对话参与状态（相对于 burst 检测独立）"""
+    OUTSIDE = "outside"
+    ATTENTION_DELAY = "attention_delay"
+    IN_CONVERSATION = "in_conversation"
+
+    # 默认值
+    DEFAULT_ATTENTION_DELAY = (5, 60)       # 秒回型 5-60s
+    DEFAULT_CONVERSATION_TIMEOUT = 600       # 10分钟没人说话 → 退出对话
 
 
 class Scheduler:
@@ -32,6 +51,19 @@ class Scheduler:
         # 行为控制器（v2 新增）
         self.behavior_ctrl = BehaviorController(self.llm.persona)
 
+        # ── 对话参与状态机（v2.1） ──
+        self.conv_state: str = ConvState.OUTSIDE
+        self.last_activity_time: float = 0  # 对话中最后一次互动的时间
+        self.attention_timer_task: Optional[asyncio.Task] = None
+        self.exit_timer_task: Optional[asyncio.Task] = None
+
+        # 从 persona 读取时间参数
+        timing = self.llm.persona.timing
+        self._attention_delay_range: tuple = self._parse_attention_delay(timing)
+        self._conversation_timeout: int = timing.get(
+            "conversation_timeout", ConvState.DEFAULT_CONVERSATION_TIMEOUT
+        )
+
         # 定时器
         self.burst_timer_task: Optional[asyncio.Task] = None
         self.dispatch_task: Optional[asyncio.Task] = None
@@ -44,13 +76,25 @@ class Scheduler:
         self._last_user_text: str = ""
         self._current_behavior_plan: BehaviorPlan = None
 
+    @staticmethod
+    def _parse_attention_delay(timing: dict) -> tuple:
+        """从 persona timing 读取 attention_delay，返回 (min_seconds, max_seconds)"""
+        ad = timing.get("attention_delay", {})
+        profile = ad.get("profile", "moderate")
+        profiles = ad.get("profiles", {})
+        if profile in profiles:
+            p = profiles[profile]
+            return (p.get("min", 5), p.get("max", 60))
+        return ConvState.DEFAULT_ATTENTION_DELAY
+
     # ── Message Entry ───────────────────────────────────────
 
     async def on_user_message(self, text: str):
-        """收到消息 → 进 context → 记录行为 → 启动/重置 burst timer"""
+        """收到消息 → 检测对话状态 → 进 context → 启动/重置 burst timer"""
         now = time.time()
         self.last_user_msg_time = now
         self._last_user_text = text
+        self.last_activity_time = now
 
         # 通知行为控制器
         self.behavior_ctrl.record_user_msg(text)
@@ -61,6 +105,24 @@ class Scheduler:
 
         win = self._burst_window(text)
         self.context.append({"role": "user", "content": text})
+
+        # ── 对话参与状态判断 ──
+        if self.conv_state == ConvState.OUTSIDE:
+            # 不在对话中 → 需要等 attention_delay 才能进入对话
+            self._cancel_exit_timer()
+            self.conv_state = ConvState.ATTENTION_DELAY
+            delay = random.uniform(*self._attention_delay_range)
+            self.app.on_status(f"📱 {self.name} 还没注意到消息... {delay:.0f}s" if self.name else f"📱 等待注意... {delay:.0f}s")
+            self._start_attention_timer(now, delay)
+            return  # 不继续 burst 流程，等 attention delay 结束
+
+        elif self.conv_state == ConvState.ATTENTION_DELAY:
+            # 延迟期间又来了一条 → 不打断，让它自然进入对话
+            # 消息已进 context，等 attention timer 触发后自然会处理
+            return
+
+        # IN_CONVERSATION：正常流程
+        self._cancel_exit_timer()  # 重置退出倒计时
 
         if self.state in (State.DISPATCHING, State.AWAITING_REPLAN, State.SEARCHING):
             self._deferred_user_msgs.append({"role": "user", "content": text})
@@ -100,6 +162,45 @@ class Scheduler:
             return 1.0
         else:
             return 0.5
+
+    # ── Conversation State Machine ──────────────────────────
+
+    def _start_attention_timer(self, now: float, delay: float):
+        """等待 attention_delay 后进入对话状态"""
+        self._cancel_attention_timer()
+        self.attention_timer_task = asyncio.create_task(self._attention_wait(delay))
+
+    def _cancel_attention_timer(self):
+        if self.attention_timer_task and not self.attention_timer_task.done():
+            self.attention_timer_task.cancel()
+
+    async def _attention_wait(self, delay: float):
+        await asyncio.sleep(delay)
+        now = time.time()
+        self.conv_state = ConvState.IN_CONVERSATION
+        self.last_activity_time = now
+        self.app.on_status(f"👀 {self.name} 注意到了消息" if self.name else "👀 注意到了消息")
+
+        # 进入对话后，像正常流程一样启动 burst 检测
+        win = self._burst_window(self._last_user_text)
+        self.state = State.WAITING_BURST
+        self._start_timer(now, win)
+
+    def _start_exit_timer(self):
+        """对话沉默后启动退出倒计时"""
+        self._cancel_exit_timer()
+        self.exit_timer_task = asyncio.create_task(self._exit_wait())
+
+    def _cancel_exit_timer(self):
+        if self.exit_timer_task and not self.exit_timer_task.done():
+            self.exit_timer_task.cancel()
+
+    async def _exit_wait(self):
+        await asyncio.sleep(self._conversation_timeout)
+        # 超时前没人说话 → 退出对话状态
+        if time.time() - self.last_activity_time >= self._conversation_timeout:
+            self.conv_state = ConvState.OUTSIDE
+            self.app.on_status(f"💤 {self.name} 忙别的去了" if self.name else "💤 退出对话")
 
     def _start_timer(self, now: float, duration: float):
         self.app.on_status(f"⏳ 等待 {duration:.0f}s...")
@@ -226,6 +327,7 @@ class Scheduler:
                     await self._execute_search_and_replan()
                 else:
                     self.state = State.IDLE
+                    self._start_exit_timer()  # 对话暂时结束，启动退出倒计时
                     self.app.on_status("👂 就绪")
 
         except asyncio.CancelledError:
@@ -324,3 +426,5 @@ class Scheduler:
     async def shutdown(self):
         self._cancel_timer()
         self._cancel_dispatch()
+        self._cancel_attention_timer()
+        self._cancel_exit_timer()

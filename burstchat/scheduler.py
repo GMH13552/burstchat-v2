@@ -79,25 +79,23 @@ class Scheduler:
     @staticmethod
     def _parse_attention_delay(timing: dict) -> tuple:
         """从 persona timing 读取 attention_delay，返回 (min_seconds, max_seconds)
-        注意：这里只做最轻量的延迟（模拟"刚看到消息"），真正的回复间隔由 LLM 的 t 值控制。
+        
+        这模拟的是角色"看到消息前"的延迟（看手机习惯）。
+        LLM 的第一个 t 只代表看到消息后的打字/思考时间，不再重复计。
         """
         ad = timing.get("attention_delay", {})
         profile = ad.get("profile", "moderate")
-        # 内置 profiles（不管真实数据多慢，机器人不模拟那么久）
-        builtin = {
-            "instant": (1, 3),
-            "fast": (2, 5),
-            "moderate": (3, 8),
-            "slow": (5, 15),
-            "twilight": (5, 15),  # reality: hours, bot: max 15s
-        }
-        if profile in builtin:
-            return builtin[profile]
-        # 如果有自定义 profiles
         profiles = ad.get("profiles", {})
+        # 精确匹配 profile 名
         if profile in profiles:
             p = profiles[profile]
-            return (min(15, p.get("min", 3)), min(30, p.get("max", 8)))
+            return (p.get("min", 5), p.get("max", 60))
+        # 没匹配到 → 用第一个可用的 profile（from_data / real 等 auto-generated key）
+        if profiles:
+            p = next(iter(profiles.values()))
+            # 用 p50 作为 max，p50/4 作为 min（合理范围）
+            p50 = p.get("p50", 30)
+            return (max(1, p50 // 4), max(5, p50))
         return ConvState.DEFAULT_ATTENTION_DELAY
 
     # ── Message Entry ───────────────────────────────────────

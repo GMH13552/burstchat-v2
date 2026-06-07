@@ -168,9 +168,9 @@ class LayeredPersona:
         lines = ["## 本次时间约束（调度器指定）"]
         lines.append(f"- 回复模式：{bp.burst_mode}")
         lines.append(f"- 最多{bp.max_fragments}条消息")
+        lines.append(f"- 第一条 `t` = 看到消息后的打字/思考时间（1-5s），不要包含看手机的等待")
         lines.append(f"- 同思绪碎片间隔 {bp.fragment_delay_range[0]}-{bp.fragment_delay_range[1]}s")
         lines.append(f"- 切换话题碎片间隔 {bp.thought_delay_range[0]}-{bp.thought_delay_range[1]}s")
-        lines.append(f"- 第一条消息延迟约 {bp.first_reply_delay}s")
         lines.append(f"- 情绪基调：{bp.energy}")
         if bp.suppressed_tics:
             lines.append(f"- ⚠️ 本次禁止使用以下口头禅：{', '.join(bp.suppressed_tics)}")

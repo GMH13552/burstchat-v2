@@ -17,7 +17,7 @@ from .prompt import build_footer
 class LLMClient:
     def __init__(self, api_key: str, persona: str = "xiaoye", model: str = "deepseek-chat"):
         self.client = AsyncOpenAI(
-            api_key=***,
+            api_key=api_key,
             base_url="https://api.deepseek.com",
         )
         self.model = model

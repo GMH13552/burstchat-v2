@@ -242,6 +242,21 @@ async def main_async(args):
     if not api_key:
         print("ERROR: need DEEPSEEK_API_KEY"); sys.exit(1)
 
+    # Time filtering
+    if args.since:
+        filtered = []
+        for line in text.split('\n'):
+            if line.startswith('['):
+                ts = line[1:11]  # YYYY-MM-DD
+                if ts >= args.since:
+                    filtered.append(line)
+        old_count = len([l for l in text.split('\n') if l.startswith('[')])
+        new_count = len(filtered)
+        print(f"Time filter: {args.since} -> {new_count}/{old_count} messages")
+        text = '\n'.join(filtered)
+        if not filtered:
+            print(f"ERROR: no messages since {args.since}"); sys.exit(1)
+
     # Step 1: Timing
     print("[1/3] Analyzing timing...")
     timing = run_timing(text, target)
@@ -253,7 +268,7 @@ async def main_async(args):
     print("[2/3] Computing stats...")
     from persona_extractor import parse_generic, preprocess
     msgs = parse_generic(text, target)
-    data = preprocess(msgs, target, max_chars=60000)
+    data = preprocess(msgs, target, max_chars=args.max_chars)
     if "error" in data:
         print(f"  ERROR: {data['error']}"); sys.exit(1)
     stats = data["stats"]
@@ -299,6 +314,8 @@ def main():
     parser.add_argument("--target", "-t", required=True)
     parser.add_argument("--output", "-o")
     parser.add_argument("--api-key", "-k")
+    parser.add_argument("--since", "-s", help="只分析此日期之后的消息，如 2026-03-01")
+    parser.add_argument("--max-chars", type=int, default=60000, help="发送给LLM的最大字符数")
     args = parser.parse_args()
     asyncio.run(main_async(args))
 

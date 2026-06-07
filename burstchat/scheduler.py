@@ -99,12 +99,15 @@ class Scheduler:
             self.conv_state = ConvState.IN_CONVERSATION
             self.last_activity_time = now
             
-            # 注入 sys 提示：告诉 LLM 这是新对话首条消息
+            # 注入 sys 提示：告诉 LLM 这是新对话首条消息，带上真实延迟数据
+            timing = self.llm.persona.timing
+            delay_info = self._build_delay_hint(timing)
             context_hint = (
                 f"[系统提示] 这是新对话的第一条消息"
-                f"（距上次对话{'已过' + str(gap_minutes) + '分钟' if gap_minutes < 999 else '很久'}）。"
-                f"请根据你的性格和当前活跃度，在第一条消息的 `t` 值中体现自然的回复延迟。"
-                f"如果你习惯秒回，t 可以很小；如果你习惯慢回，t 可以很大。"
+                f"（距上次对话{'已过' + str(gap_minutes) + '分钟' if gap_minutes < 999 else '很久'}）。\n"
+                f"{delay_info}\n"
+                f"请在第一条消息的 `t` 值中体现自然的回复延迟。"
+                f"每次都要随机选择不同的值，不要每次都一样！"
             )
             self.context.append({"role": "system", "content": context_hint})
             self.app.on_status(f"💬 新对话 (gap={gap_minutes}min)" if gap_minutes < 999 else "💬 新对话")
@@ -136,6 +139,42 @@ class Scheduler:
             self._start_timer(now, win)
 
     # ── Burst Window ────────────────────────────────────────
+
+    @staticmethod
+    def _build_delay_hint(timing: dict) -> str:
+        """从 persona timing 提取延迟范围，构建 LLM 提示"""
+        parts = ["你的自然回复习惯："]
+        
+        # Attention delay (首条回复的延迟)
+        ad = timing.get("attention_delay", {})
+        profiles = ad.get("profiles", {})
+        if profiles:
+            p = next(iter(profiles.values()))
+            mn, mx, p50 = p.get("min", 0), p.get("max", 0), p.get("p50", 0)
+            if p50:
+                if p50 < 60:
+                    parts.append(f"- 你通常 {int(p50)}s 左右开始回复（范围 {int(mn)}s-{int(mx)}s）")
+                elif p50 < 3600:
+                    parts.append(f"- 你通常 {p50/60:.0f}min 左右开始回复（范围 {mn/60:.0f}-{mx/60:.0f}min）")
+                else:
+                    parts.append(f"- 你通常 {p50/3600:.1f}h 左右开始回复（范围 {mn/3600:.1f}-{mx/3600:.1f}h）")
+        
+        # First reply gap (对话中第一条回复)
+        fr = timing.get("first_reply_gap", {})
+        if fr.get("normal"):
+            parts.append(f"- 看到消息后思考 {fr.get('min', 1)}-{fr.get('max', 5)}s 再打字（目标约 {fr.get('normal', 3)}s）")
+        
+        # Fragment delay (碎片间隔)
+        frag = timing.get("fragmentation", {})
+        fd = frag.get("fragment_delay", {})
+        if fd.get("same_thought"):
+            st = fd["same_thought"]
+            parts.append(f"- 同话题碎片间隔 {st[0]}-{st[1]}s")
+        if fd.get("new_thought"):
+            nt = fd["new_thought"]
+            parts.append(f"- 换话题间隔 {nt[0]}-{nt[1]}s")
+        
+        return "\n".join(parts)
 
     @staticmethod
     def _burst_window(text: str) -> float:

@@ -142,22 +142,23 @@ class Scheduler:
 
     @staticmethod
     def _build_delay_hint(timing: dict) -> str:
-        """从 persona timing 提取延迟范围，构建 LLM 提示"""
-        parts = ["你的自然回复习惯："]
+        """从 persona timing 提取范围，构建带上限的延迟提示"""
+        parts = ["你的回复延迟（真人参考 + 模拟上限）："]
         
-        # Attention delay (首条回复的延迟)
+        # 真实数据作为参考
         ad = timing.get("attention_delay", {})
         profiles = ad.get("profiles", {})
         if profiles:
             p = next(iter(profiles.values()))
             mn, mx, p50 = p.get("min", 0), p.get("max", 0), p.get("p50", 0)
             if p50:
-                if p50 < 60:
-                    parts.append(f"- 你通常 {int(p50)}s 左右开始回复（范围 {int(mn)}s-{int(mx)}s）")
-                elif p50 < 3600:
-                    parts.append(f"- 你通常 {p50/60:.0f}min 左右开始回复（范围 {mn/60:.0f}-{mx/60:.0f}min）")
-                else:
-                    parts.append(f"- 你通常 {p50/3600:.1f}h 左右开始回复（范围 {mn/3600:.1f}-{mx/3600:.1f}h）")
+                parts.append(f"- 真人数据：中位 {int(p50)}s，范围 {int(mn)}s-{int(mx)}s （仅供参考，不需要等这么久）")
+        
+        # 模拟用的实际范围（从 first_reply_gap 取，没有则默认）
+        fr = timing.get("first_reply_gap", {})
+        sim_min = fr.get("min", 2)
+        sim_max = min(fr.get("max", 8), 120)
+        parts.append(f"- 请在 {sim_min}s-{sim_max}s 之间随机选第一条 t，每次不同")
         
         # First reply gap (对话中第一条回复)
         fr = timing.get("first_reply_gap", {})

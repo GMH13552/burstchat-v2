@@ -155,6 +155,7 @@ class LLMClient:
         elapsed = 0.0
         for item in items:
             t = float(item.get("t", 2))
+            t = min(t, 300)  # 硬上限 5 分钟，防止 LLM 设几小时
             text = str(item.get("text", ""))
             if text.strip():
                 elapsed += t

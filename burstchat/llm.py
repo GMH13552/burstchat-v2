@@ -37,8 +37,7 @@ class LLMClient:
         behavior_plan: BehaviorPlan = None,
         search_context: str = "",
     ) -> PlanResult:
-        """生成消息序列（v2：支持 behavior_plan 和 search_context）"""
-        # 用分层 persona 构建系统 prompt
+        """Generate message sequence"""
         system_text = self.persona.build_system_prompt(
             behavior_plan=behavior_plan,
             is_replan=is_replan,
@@ -52,20 +51,9 @@ class LLMClient:
             {"role": "system", "content": footer},
         ]
 
-        self._debug_log(
-            f"PROMPT ({len(messages)} msgs, is_replan={is_replan}): "
-            f"ctx_turns={len(context)}, "
-            f"energy={behavior_plan.energy if behavior_plan else 'N/A'}, "
-            f"suppressed_tics={behavior_plan.suppressed_tics if behavior_plan else []}"
-        )
-
-        # 根据 behavior 调整 temperature
         temperature = 0.9
         if behavior_plan:
-            if behavior_plan.energy == "high":
-                temperature = 0.95
-            elif behavior_plan.energy == "low":
-                temperature = 0.7
+            temperature = 0.95 if behavior_plan.energy == "high" else (0.7 if behavior_plan.energy == "low" else 0.9)
 
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -75,9 +63,11 @@ class LLMClient:
         )
 
         content = response.choices[0].message.content.strip()
-        self._debug_log(f"RAW ({len(content)} chars): {content}")
-
-        return self._parse_response(content, now)
+        try:
+            return self._parse_response(content, now)
+        except Exception as e:
+            self._debug_log(f"PARSE ERROR: {e}\nRAW: {content[:500]}")
+            raise
 
     def _parse_response(self, content: str, now: float) -> PlanResult:
         # ── Clean content ──

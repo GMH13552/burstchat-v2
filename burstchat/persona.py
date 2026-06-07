@@ -268,15 +268,10 @@ class LayeredPersona:
         return "## 回复示例\n\n" + "\n\n".join(blocks)
 
     def _build_format_block(self) -> str:
-        return """## 输出格式（铁律）
+        rules_block = "\n".join(f"- {r}" for r in self.rules)
+        return f"""## 输出格式（铁律）
 只输出 JSON 对象：
-{"search": "有需要查证的填搜索词，没有就 \\"\\"",
- "messages": [
-  {"t": 3, "text": "情绪反应（≤6字）"},
-  {"t": 4, "text": "吐槽碎片1（≤10字）"},
-  {"t": 6, "text": "吐槽碎片2（≤10字）"},
-  {"t": 9, "text": "换话题（≤12字）"}
-]}
+{{{{"search": "有需要查证的填搜索词，没有就 \\"\\"", "messages": [...]}}}}
 - `t` = 和上一条消息之间的间隔秒数（第一条是距离现在的间隔）
 - 同句碎片间隔 3-4s，换话题间隔 6-9s
 - 长文本（15-20字）加 3-5s，超长（20字+）起步 10s
@@ -286,7 +281,7 @@ class LayeredPersona:
 需要查证某件事时，`search` 填上搜索词，系统搜完把结果给你。
 
 ## 重要
-{}.""".format("\n".join(f"- {r}" for r in self.rules))
+{rules_block}"""
 
 
 def load_persona(name: str = "xiaoye") -> LayeredPersona:

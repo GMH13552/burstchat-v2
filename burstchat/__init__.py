@@ -7,6 +7,7 @@ from .llm import LLMClient
 from .persona import load_persona, LayeredPersona
 from .behavior import BehaviorController
 from .models import State, PendingMessage, PlanResult, BehaviorPlan
+from .app import CompanionApp
 
 __all__ = [
     "Scheduler",
@@ -18,4 +19,5 @@ __all__ = [
     "PendingMessage",
     "PlanResult",
     "BehaviorPlan",
+    "CompanionApp",
 ]

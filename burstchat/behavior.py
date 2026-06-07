@@ -35,20 +35,44 @@ class BehaviorController:
     ]
 
     # ── 时间约束默认值 ──
-    FRAGMENT_FAST = (1, 3)      # 高能量碎片间隔
-    FRAGMENT_NORMAL = (2, 4)     # 正常碎片间隔
-    FRAGMENT_SLOW = (4, 7)       # 低落碎片间隔
-    THOUGHT_FAST = (4, 7)        # 高能量换话题
-    THOUGHT_NORMAL = (6, 9)      # 正常换话题
-    THOUGHT_SLOW = (8, 14)       # 低落换话题
+    FRAGMENT_FAST = (1, 3)
+    FRAGMENT_NORMAL = (2, 4)
+    FRAGMENT_SLOW = (4, 7)
+    THOUGHT_FAST = (4, 7)
+    THOUGHT_NORMAL = (6, 9)
+    THOUGHT_SLOW = (8, 14)
 
     def __init__(self, persona):
-        self.persona = persona  # LayeredPersona
+        self.persona = persona
         self.recent_tics: deque = deque(maxlen=self.TIC_WINDOW_SIZE)
         self.burst_history: deque = deque(maxlen=5)
         self.user_engagement: float = 0.5
         self.last_user_msg_time: float = 0
         self.conversation_turn: int = 0
+        
+        # Load timing from persona if available
+        self._load_persona_timing()
+    
+    def _load_persona_timing(self):
+        """从 persona.timing 读取真实时间数据，替换默认值"""
+        t = self.persona.timing
+        if not t:
+            return
+        
+        # Fragment delays
+        fd = t.get("fragmentation", {}).get("fragment_delay", {})
+        if fd.get("same_thought") and len(fd["same_thought"]) == 2:
+            st = fd["same_thought"]
+            self.FRAGMENT_FAST = (max(1, st[0] - 1), st[0])
+            self.FRAGMENT_NORMAL = tuple(st)
+            self.FRAGMENT_SLOW = (st[1], st[1] + 3)
+        if fd.get("new_thought") and len(fd["new_thought"]) == 2:
+            nt = fd["new_thought"]
+            self.THOUGHT_FAST = (max(2, nt[0] - 2), nt[0])
+            self.THOUGHT_NORMAL = tuple(nt)
+            self.THOUGHT_SLOW = (nt[1], nt[1] + 5)
+        
+        print(f"[Behavior] Timing from persona: frag={self.FRAGMENT_NORMAL}, thought={self.THOUGHT_NORMAL}")
 
     # ── 主入口 ──
 

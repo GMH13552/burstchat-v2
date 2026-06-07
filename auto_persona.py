@@ -130,59 +130,51 @@ async def run_persona_llm(text: str, target: str, api_key: str) -> str:
 
 # ─── Step 4: Synthesize JSON ───────────────────────────────────
 
-SYNTHESIS_SYSTEM = """你是一个 persona 编译器。你的任务是把人物分析报告 + 时间数据 + 统计数据，编译成一个结构化的 JSON persona 配置。
+SYNTHESIS_SYSTEM = """你是一个 persona 编译器。把人物分析报告 + 时间数据 + 统计数据编译成结构化 JSON persona 配置。
 
 输出纯 JSON，包含以下字段：
 
 {
   "name": "名字",
   "description": "一句话性格概述",
-  "layer_0_core_rules": {
-    "rules": ["核心行为规则1", "规则2", ...]
-  },
+  "layer_0_core_rules": {"rules": ["核心行为规则"]},
   "layer_1_identity": {
-    "age": "年龄段(如 20-25)",
-    "job": "推断的职业/身份",
-    "traits": ["性格特质1", "特质2", ...],
+    "age": "精确年龄/年级（如'北师大大二'而不是'20-25学生'）",
+    "job": "精确身份（如'统计+经济双学位'而不是'学生'）",
+    "traits": ["性格特质"],
     "pet": "宠物(如有)"
   },
   "layer_2_expression": {
     "max_chars_per_msg": 12,
     "no_period": true,
     "casual_typos": true,
-    "catchphrases": ["口头禅1", "口头禅2", ...],
-    "emoji": ["常用emoji1", ...],
+    "catchphrases": ["必须来自统计数据 top_phrases 或报告中的原文引用，不要编造"],
+    "emoji": ["必须来自统计数据 top_emojis，取实际频率最高的5-8个"],
     "style_notes": ["风格备注"]
   },
   "layer_3_emotional": {
-    "express_care": "如何表达在乎(具体行为)",
-    "express_upset": "如何表达不满(具体行为)",
+    "express_care": "如何表达在乎",
+    "express_upset": "如何表达不满",
     "apology_style": "道歉方式",
-    "affection_style": "说\"喜欢\"的方式"
+    "affection_style": "说喜欢的方式"
   },
   "layer_4_conflict": {
-    "conflict_chain": "冲突模式描述",
-    "reconciliation_signal": "和解信号描述",
-    "trigger_topics": ["容易被激怒的话题"]
+    "conflict_chain": "冲突模式",
+    "reconciliation_signal": "和解信号",
+    "trigger_topics": ["触发话题"]
   },
   "layer_5_triggers": {},
-  "timing": {
-    "attention_delay": {"profile": "moderate", "profiles": {"from_data": {"min": 5, "max": 60}}},
-    "conversation_timeout": 600,
-    "first_reply_gap": {"normal": 3, "min": 1, "max": 8},
-    "fragmentation": {"mode": "medium", "avg_per_burst": 2, "fragment_delay": {"same_thought": [2,4], "new_thought": [6,9]}}
-  },
+  "timing": {"conversation_timeout": 600, ...},
   "example_bursts": [],
   "rules": ["角色规则"]
 }
 
-规则：
-1. 所有字段必须从分析报告中推断，不要编造
-2. 口头禅/emoji必须来自报告中的原文引用
-3. timing 直接使用提供的时间数据
-4. 情感行为必须对应报告中的具体行为描述
-5. 如果某维度信息不足，用合理的默认值填充
-6. 输出纯JSON，不要markdown包裹，不要注释"""
+铁律：
+1. identity 必须精确——从报告中提取学校/专业/年级/工作，拒绝模糊表述
+2. emoji 必须从统计数据中直接取，不要编
+3. catchphrases 必须来自 top_phrases 或报告原文，一个字都不能编
+4. 情感行为必须对应报告中的原文引用
+5. 输出纯JSON，不要markdown包裹"""
 
 
 async def synthesize_persona(persona_report: str, timing_data: dict,

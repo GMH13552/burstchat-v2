@@ -1,12 +1,9 @@
 """
 核心调度器 v2：对话状态机 + 行为控制器 + burst 检测 + 插话重规划
 
-对话状态模型（独立于 burst 检测）：
-  OUTSIDE → ATTENTION_DELAY → IN_CONVERSATION → OUTSIDE
-
-  OUTSIDE:          对方没在看聊天（忙自己的事）
-  ATTENTION_DELAY:  消息到了但还没注意到（等待 attention_delay 结束）
-  IN_CONVERSATION:  已进入对话，正常 persona 节奏
+对话状态模型（v2.2：LLM 感知延迟，不再代码硬模拟）
+  OUTSIDE → IN_CONVERSATION (首条消息直接进，sys 提示告知 LLM)
+  IN_CONVERSATION → OUTSIDE (超时退出)
 """
 
 import asyncio
@@ -23,14 +20,13 @@ from .prompt import SEARCH_RESULT_HINT
 
 
 class ConvState:
-    """对话参与状态（相对于 burst 检测独立）"""
+    """对话参与状态（v2.2：去掉 ATTENTION_DELAY，改为 LLM 感知节奏）
+    OUTSIDE → IN_CONVERSATION (首条消息直接进，sys 提示告知 LLM)
+    IN_CONVERSATION → OUTSIDE (超时退出)
+    """
     OUTSIDE = "outside"
-    ATTENTION_DELAY = "attention_delay"
     IN_CONVERSATION = "in_conversation"
-
-    # 默认值
-    DEFAULT_ATTENTION_DELAY = (1, 5)        # 象征性延迟，真正的回复间隔由 LLM t 控制
-    DEFAULT_CONVERSATION_TIMEOUT = 600       # 10分钟没人说话 → 退出对话
+    DEFAULT_CONVERSATION_TIMEOUT = 600  # 10分钟
 
 
 class Scheduler:
@@ -51,15 +47,13 @@ class Scheduler:
         # 行为控制器（v2 新增）
         self.behavior_ctrl = BehaviorController(self.llm.persona)
 
-        # ── 对话参与状态机（v2.1） ──
+        # ── 对话参与状态机（v2.2） ──
         self.conv_state: str = ConvState.OUTSIDE
-        self.last_activity_time: float = 0  # 对话中最后一次互动的时间
-        self.attention_timer_task: Optional[asyncio.Task] = None
+        self.last_activity_time: float = 0
         self.exit_timer_task: Optional[asyncio.Task] = None
 
         # 从 persona 读取时间参数
         timing = self.llm.persona.timing
-        self._attention_delay_range: tuple = self._parse_attention_delay(timing)
         self._conversation_timeout: int = timing.get(
             "conversation_timeout", ConvState.DEFAULT_CONVERSATION_TIMEOUT
         )
@@ -75,28 +69,6 @@ class Scheduler:
         self._pending_search: str = ""
         self._last_user_text: str = ""
         self._current_behavior_plan: BehaviorPlan = None
-
-    @staticmethod
-    def _parse_attention_delay(timing: dict) -> tuple:
-        """从 persona timing 读取 attention_delay，返回 (min_seconds, max_seconds)
-        
-        这模拟的是角色"看到消息前"的延迟（看手机习惯）。
-        LLM 的第一个 t 只代表看到消息后的打字/思考时间，不再重复计。
-        """
-        ad = timing.get("attention_delay", {})
-        profile = ad.get("profile", "moderate")
-        profiles = ad.get("profiles", {})
-        # 精确匹配 profile 名
-        if profile in profiles:
-            p = profiles[profile]
-            return (p.get("min", 5), p.get("max", 60))
-        # 没匹配到 → 用第一个可用的 profile（from_data / real 等 auto-generated key）
-        if profiles:
-            p = next(iter(profiles.values()))
-            # 用 p50 作为 max，p50/4 作为 min（合理范围）
-            p50 = p.get("p50", 30)
-            return (max(1, p50 // 4), max(5, p50))
-        return ConvState.DEFAULT_ATTENTION_DELAY
 
     # ── Message Entry ───────────────────────────────────────
 
@@ -118,19 +90,24 @@ class Scheduler:
         self.context.append({"role": "user", "content": text})
 
         # ── 对话参与状态判断 ──
-        if self.conv_state == ConvState.OUTSIDE:
-            # 不在对话中 → 需要等 attention_delay 才能进入对话
+        was_outside = (self.conv_state == ConvState.OUTSIDE)
+        
+        if was_outside:
+            # 新对话/回归：进入对话状态，注入提示让 LLM 感知节奏
             self._cancel_exit_timer()
-            self.conv_state = ConvState.ATTENTION_DELAY
-            delay = random.uniform(*self._attention_delay_range)
-            self.app.on_status(f"📱 {self.name} 还没注意到消息... {delay:.0f}s" if self.name else f"📱 等待注意... {delay:.0f}s")
-            self._start_attention_timer(now, delay)
-            return  # 不继续 burst 流程，等 attention delay 结束
-
-        elif self.conv_state == ConvState.ATTENTION_DELAY:
-            # 延迟期间又来了一条 → 不打断，让它自然进入对话
-            # 消息已进 context，等 attention timer 触发后自然会处理
-            return
+            gap_minutes = int((now - self.last_activity_time) / 60) if self.last_activity_time else 999
+            self.conv_state = ConvState.IN_CONVERSATION
+            self.last_activity_time = now
+            
+            # 注入 sys 提示：告诉 LLM 这是新对话首条消息
+            context_hint = (
+                f"[系统提示] 这是新对话的第一条消息"
+                f"（距上次对话{'已过' + str(gap_minutes) + '分钟' if gap_minutes < 999 else '很久'}）。"
+                f"请根据你的性格和当前活跃度，在第一条消息的 `t` 值中体现自然的回复延迟。"
+                f"如果你习惯秒回，t 可以很小；如果你习惯慢回，t 可以很大。"
+            )
+            self.context.append({"role": "system", "content": context_hint})
+            self.app.on_status(f"💬 新对话 (gap={gap_minutes}min)" if gap_minutes < 999 else "💬 新对话")
 
         # IN_CONVERSATION：正常流程
         self._cancel_exit_timer()  # 重置退出倒计时
@@ -175,27 +152,6 @@ class Scheduler:
             return 0.5
 
     # ── Conversation State Machine ──────────────────────────
-
-    def _start_attention_timer(self, now: float, delay: float):
-        """等待 attention_delay 后进入对话状态"""
-        self._cancel_attention_timer()
-        self.attention_timer_task = asyncio.create_task(self._attention_wait(delay))
-
-    def _cancel_attention_timer(self):
-        if self.attention_timer_task and not self.attention_timer_task.done():
-            self.attention_timer_task.cancel()
-
-    async def _attention_wait(self, delay: float):
-        await asyncio.sleep(delay)
-        now = time.time()
-        self.conv_state = ConvState.IN_CONVERSATION
-        self.last_activity_time = now
-        self.app.on_status(f"👀 {self.name} 注意到了消息" if self.name else "👀 注意到了消息")
-
-        # 进入对话后，像正常流程一样启动 burst 检测
-        win = self._burst_window(self._last_user_text)
-        self.state = State.WAITING_BURST
-        self._start_timer(now, win)
 
     def _start_exit_timer(self):
         """对话沉默后启动退出倒计时"""
@@ -438,5 +394,4 @@ class Scheduler:
     async def shutdown(self):
         self._cancel_timer()
         self._cancel_dispatch()
-        self._cancel_attention_timer()
         self._cancel_exit_timer()

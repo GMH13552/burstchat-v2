@@ -6,3 +6,7 @@ exes/
 
 
 .env.example
+
+# generated personas (private)
+personas/liuyue.json
+personas/corrections.json

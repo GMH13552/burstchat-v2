@@ -142,22 +142,17 @@ class Scheduler:
 
     @staticmethod
     def _build_delay_hint(timing: dict) -> str:
-        """从 persona timing 提取真人数据作为 LLM 参考（不强制范围）"""
-        parts = ["你的真实回复习惯（仅供参考）："]
+        """从 persona timing 提取真人数据作为 LLM 参考（全部用秒）"""
+        parts = ["你的真实回复习惯（仅供参考，t 单位是秒）："]
         
         ad = timing.get("attention_delay", {})
         profiles = ad.get("profiles", {})
         if profiles:
             p = next(iter(profiles.values()))
-            mn, mx, p50 = p.get("min", 0), p.get("max", 0), p.get("p50", 0)
+            mn, mx, p50 = int(p.get("min", 0)), int(p.get("max", 0)), int(p.get("p50", 0))
             if p50:
-                if p50 < 60:
-                    parts.append(f"- 你通常 {int(p50)}s 开始回复（范围 {int(mn)}s-{int(mx)}s）")
-                elif p50 < 3600:
-                    parts.append(f"- 你通常 {p50/60:.0f}min 开始回复（范围 {mn/60:.0f}-{mx/60:.0f}min）")
-                else:
-                    parts.append(f"- 你通常 {p50/3600:.1f}h 开始回复（范围 {mn/3600:.1f}-{mx/3600:.1f}h）")
-                parts.append("- 但如果你刚好在看手机，也可能秒回")
+                parts.append(f"- 你通常 {p50}s 开始回复（范围 {mn}s-{mx}s）")
+                parts.append("- 但如果你刚好在看手机，也可能秒回（t=1~5s）")
         
         fr = timing.get("first_reply_gap", {})
         if fr.get("normal"):

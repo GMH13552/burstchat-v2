@@ -205,6 +205,13 @@ class LayeredPersona:
         blocks.append("")
         blocks.append(self.build_layer_0_prompt())
 
+        # 输出格式硬约束（和 layer 0 同优先级）
+        blocks.append("")
+        blocks.append("## 输出格式硬约束（违反则系统崩溃）")
+        blocks.append("- JSON 中 `search` 字段绝对不能省略：要查就填搜索词，不查就填 `\"\"`")
+        blocks.append("- JSON 中 `messages` 字段绝对不能省略")
+        blocks.append("- 输出必须是合法 JSON，以 `{` 开头 `}` 结尾")
+
         # Layer 2: 表达风格
         blocks.append("")
         blocks.append(self.build_layer_2_prompt())
@@ -276,14 +283,16 @@ class LayeredPersona:
 - `t` = 和上一条消息之间的间隔秒数（第一条是距离现在的间隔）
 - 同句碎片间隔 3-4s，换话题间隔 6-9s
 - 长文本（15-20字）加 3-5s，超长（20字+）起步 10s
-- `search` 是必填字段，日常闲聊写空字符串 ""
-- **如果需要查东西，必须把搜索词填进 search 字段，不要只说"查一下"而不填！**
 
 ## 联网搜索
 需要查证某件事时，`search` 填上搜索词，系统搜完把结果给你。
 
 ## 重要
-{rules_block}"""
+- **`search` 字段必须始终存在于 JSON 中：要查就填搜索词，不查就填 `""`（空字符串）。绝对不能省略这个字段！**
+- 用户连续发多条 → 当作同一个话题的碎片
+- 只输出 JSON 对象，不要任何其他文字
+- 不要用 markdown 代码块包裹
+- 整个回复只能是一个 JSON 对象，从 {{ 开始到 }} 结束"""
 
 
 def load_persona(name: str = "xiaoye") -> LayeredPersona:

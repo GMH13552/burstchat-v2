@@ -29,7 +29,7 @@ class ConvState:
     IN_CONVERSATION = "in_conversation"
 
     # 默认值
-    DEFAULT_ATTENTION_DELAY = (5, 60)       # 秒回型 5-60s
+    DEFAULT_ATTENTION_DELAY = (1, 5)        # 象征性延迟，真正的回复间隔由 LLM t 控制
     DEFAULT_CONVERSATION_TIMEOUT = 600       # 10分钟没人说话 → 退出对话
 
 
@@ -78,13 +78,26 @@ class Scheduler:
 
     @staticmethod
     def _parse_attention_delay(timing: dict) -> tuple:
-        """从 persona timing 读取 attention_delay，返回 (min_seconds, max_seconds)"""
+        """从 persona timing 读取 attention_delay，返回 (min_seconds, max_seconds)
+        注意：这里只做最轻量的延迟（模拟"刚看到消息"），真正的回复间隔由 LLM 的 t 值控制。
+        """
         ad = timing.get("attention_delay", {})
         profile = ad.get("profile", "moderate")
+        # 内置 profiles（不管真实数据多慢，机器人不模拟那么久）
+        builtin = {
+            "instant": (1, 3),
+            "fast": (2, 5),
+            "moderate": (3, 8),
+            "slow": (5, 15),
+            "twilight": (5, 15),  # reality: hours, bot: max 15s
+        }
+        if profile in builtin:
+            return builtin[profile]
+        # 如果有自定义 profiles
         profiles = ad.get("profiles", {})
         if profile in profiles:
             p = profiles[profile]
-            return (p.get("min", 5), p.get("max", 60))
+            return (min(15, p.get("min", 3)), min(30, p.get("max", 8)))
         return ConvState.DEFAULT_ATTENTION_DELAY
 
     # ── Message Entry ───────────────────────────────────────

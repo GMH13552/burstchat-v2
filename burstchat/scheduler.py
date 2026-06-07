@@ -344,6 +344,7 @@ class Scheduler:
 
         try:
             response = await search_sogou(query, max_results=5)
+            self.app.on_status(f"🔍 搜索完成: {len(response.results)} 条结果")
         except Exception as e:
             self.app.on_status(f"⚠️ 搜索失败: {e}")
             self.state = State.IDLE

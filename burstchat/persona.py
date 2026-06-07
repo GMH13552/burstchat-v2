@@ -268,14 +268,16 @@ class LayeredPersona:
         return "## 回复示例\n\n" + "\n\n".join(blocks)
 
     def _build_format_block(self) -> str:
+        example = '{"search": "有需要查证的填搜索词，没有就 \"\"", "messages": [{"t": 3, "text": "..."}]}'
         rules_block = "\n".join(f"- {r}" for r in self.rules)
         return f"""## 输出格式（铁律）
-只输出 JSON 对象：
-{{{{"search": "有需要查证的填搜索词，没有就 \\"\\"", "messages": [...]}}}}
+只输出 JSON 对象，例如：
+{example}
 - `t` = 和上一条消息之间的间隔秒数（第一条是距离现在的间隔）
 - 同句碎片间隔 3-4s，换话题间隔 6-9s
 - 长文本（15-20字）加 3-5s，超长（20字+）起步 10s
 - `search` 是必填字段，日常闲聊写空字符串 ""
+- **如果需要查东西，必须把搜索词填进 search 字段，不要只说"查一下"而不填！**
 
 ## 联网搜索
 需要查证某件事时，`search` 填上搜索词，系统搜完把结果给你。

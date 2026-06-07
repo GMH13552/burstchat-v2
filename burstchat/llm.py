@@ -63,8 +63,12 @@ class LLMClient:
         )
 
         content = response.choices[0].message.content.strip()
+        self._debug_log(f"RAW ({len(content)} chars): {content[:300]}")
         try:
-            return self._parse_response(content, now)
+            result = self._parse_response(content, now)
+            if result.search_query:
+                self._debug_log(f"SEARCH: {result.search_query}")
+            return result
         except Exception as e:
             self._debug_log(f"PARSE ERROR: {e}\nRAW: {content[:500]}")
             raise

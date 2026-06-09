@@ -77,6 +77,10 @@ class Scheduler:
         now = time.time()
         self.last_user_msg_time = now
         self._last_user_text = text
+        
+        # 先算冷启动 gap，再更新 last_activity_time
+        was_outside = (self.conv_state == ConvState.OUTSIDE)
+        cold_gap = now - self.last_activity_time if self.last_activity_time > 0 else 0
         self.last_activity_time = now
 
         # 通知行为控制器
@@ -95,18 +99,31 @@ class Scheduler:
         if was_outside:
             # 新对话/回归：进入对话状态，注入提示让 LLM 感知节奏
             self._cancel_exit_timer()
-            gap_minutes = int((now - self.last_activity_time) / 60) if self.last_activity_time else 999
+            gap_sec = int(cold_gap)
+            gap_minutes = int(gap_sec / 60) if gap_sec > 0 else 999
             self.conv_state = ConvState.IN_CONVERSATION
             self.last_activity_time = now
             
             # 注入 sys 提示：告诉 LLM 这是新对话首条消息，带上真实延迟数据
             timing = self.llm.persona.timing
-            delay_info = self._build_delay_hint(timing)
+            is_cold = gap_minutes >= 5
+            delay_info = self._build_delay_hint(timing, is_cold_start=is_cold)
+            
+            if is_cold:
+                cold_lo, cold_hi = self._cold_delay_range(timing)
+                cold_guidance = (
+                    f"⚠️ 冷启动：距上次对话已过{gap_minutes}分钟，你不是刚好在看手机。"
+                    f"第一条 `t` 放 {cold_lo}-{cold_hi}s，模拟自然拿起手机/看到消息的延迟。"
+                    f"不要用1-5s秒回！每次随机选不同的值。"
+                )
+            else:
+                cold_guidance = "请在第一条消息的 `t` 值中体现自然的回复延迟。"
+            
             context_hint = (
                 f"[系统提示] 这是新对话的第一条消息"
                 f"（距上次对话{'已过' + str(gap_minutes) + '分钟' if gap_minutes < 999 else '很久'}）。\n"
                 f"{delay_info}\n"
-                f"请在第一条消息的 `t` 值中体现自然的回复延迟。"
+                f"{cold_guidance}\n"
                 f"每次都要随机选择不同的值，不要每次都一样！"
             )
             self.context.append({"role": "system", "content": context_hint})
@@ -141,7 +158,7 @@ class Scheduler:
     # ── Burst Window ────────────────────────────────────────
 
     @staticmethod
-    def _build_delay_hint(timing: dict) -> str:
+    def _build_delay_hint(timing: dict, is_cold_start: bool = False) -> str:
         """从 persona timing 提取真人数据作为 LLM 参考（全部用秒）"""
         parts = ["你的真实回复习惯（仅供参考，t 单位是秒）："]
         
@@ -150,9 +167,12 @@ class Scheduler:
         if profiles:
             p = next(iter(profiles.values()))
             mn, mx, p50 = int(p.get("min", 0)), int(p.get("max", 0)), int(p.get("p50", 0))
-            if p50:
+            if p50 and not is_cold_start:
                 parts.append(f"- 你通常 {p50}s 开始回复（范围 {mn}s-{mx}s）")
                 parts.append("- 但如果你刚好在看手机，也可能秒回（t=1~5s）")
+            elif p50:
+                # 冷启动：给具体延迟范围，不说秒回
+                parts.append(f"- 你通常 {p50}s 左右开始回复")
         
         fr = timing.get("first_reply_gap", {})
         if fr.get("normal"):
@@ -168,6 +188,21 @@ class Scheduler:
             parts.append(f"- 换话题间隔 {nt[0]}-{nt[1]}s")
         
         return "\n".join(parts)
+
+    @staticmethod
+    def _cold_delay_range(timing: dict) -> tuple:
+        """根据 persona 的 attention_delay 计算冷启动建议延迟范围"""
+        ad = timing.get("attention_delay", {})
+        profile = ad.get("profile", "moderate")
+        # 冷启动：比平时快但别太突兀
+        cold_ranges = {
+            "instant": (5, 20),     # 秒看型：冷启动短点
+            "fast": (10, 45),        # 经常看型
+            "moderate": (30, 90),    # 正常频率
+            "slow": (60, 180),       # 很少看
+            "twilight": (90, 300),   # 轮回型
+        }
+        return cold_ranges.get(profile, cold_ranges["moderate"])
 
     @staticmethod
     def _burst_window(text: str) -> float:
@@ -375,6 +410,7 @@ class Scheduler:
 
     def _dispatch_one(self, msg: PendingMessage):
         now = time.time()
+        self.last_activity_time = now  # 发消息也算互动
         self.app.on_message(self.name or "assistant", msg.text, now)
         self._pending_texts.append((now, msg.text))
         if self._on_dispatch:
